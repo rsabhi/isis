@@ -187,7 +187,7 @@ implements
         authenticationStack.get().push(authenticationLayer);
 
         if(isInBaseLayer()) {
-        	postSessionOpened(interactionSession);
+        	postInteractionOpened(interactionSession);
         }
         
         if(log.isDebugEnabled()) {
@@ -312,18 +312,18 @@ implements
     	return authenticationStack.get().size()==1; 
     }
     
-    private void postSessionOpened(IsisInteraction interaction) {
+    private void postInteractionOpened(IsisInteraction interaction) {
         interactionId.set(interaction.getInteractionId());
         interactionScopeAwareBeans.forEach(bean->bean.beforeEnteringTransactionalBoundary(interaction));
         txBoundaryHandler.onOpen(interaction);
         val isSynchronizationActive = TransactionSynchronizationManager.isSynchronizationActive();
         interactionScopeAwareBeans.forEach(bean->bean.afterEnteringTransactionalBoundary(interaction, isSynchronizationActive));
-        interactionScopeLifecycleHandler.onTopLevelInteractionOpened();
+        interactionScopeLifecycleHandler.onInteractionOpened();
     }
     
-    private void preSessionClosed(IsisInteraction interaction) {
+    private void preInteractionClosed(IsisInteraction interaction) {
         completeAndPublishCurrentCommand();
-        interactionScopeLifecycleHandler.onTopLevelInteractionClosing(); // cleanup the isis-session scope
+        interactionScopeLifecycleHandler.onInteractionClosing(); // cleanup the isis-session scope
         val isSynchronizationActive = TransactionSynchronizationManager.isSynchronizationActive();
         interactionScopeAwareBeans.forEach(bean->bean.beforeLeavingTransactionalBoundary(interaction, isSynchronizationActive));
         txBoundaryHandler.onClose(interaction);
@@ -343,7 +343,7 @@ implements
         while(stack.size()>downToStackSize) {
         	if(isInBaseLayer()) {
         		// keep the stack unmodified yet, to allow for callbacks to properly operate
-        		preSessionClosed(stack.peek().getInteraction());
+        		preInteractionClosed(stack.peek().getInteraction());
         	}
         	_Xray.closeAuthenticationLayer(stack);
             stack.pop();

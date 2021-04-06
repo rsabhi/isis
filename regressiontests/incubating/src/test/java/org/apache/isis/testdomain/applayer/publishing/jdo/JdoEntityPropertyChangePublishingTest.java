@@ -55,6 +55,7 @@ import lombok.val;
                 "logging.level.org.apache.isis.testdomain.util.rest.KVStoreForTesting=DEBUG",
                 "logging.level.org.apache.isis.persistence.jdo.integration.changetracking.JdoLifecycleListener=DEBUG",
                 "logging.level.org.apache.isis.core.transaction.changetracking.EntityChangeTrackerDefault=DEBUG",
+                "logging.level.org.apache.isis.testdomain.applayer.publishing.EntityPropertyChangeSubscriberForTesting=DEBUG",
         })
 @TestPropertySource({
     IsisPresets.UseLog4j2Test

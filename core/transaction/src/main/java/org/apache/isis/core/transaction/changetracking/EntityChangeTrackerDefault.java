@@ -20,7 +20,6 @@ package org.apache.isis.core.transaction.changetracking;
 
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
@@ -29,15 +28,10 @@ import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
 
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import org.apache.isis.applib.annotation.EntityChangeKind;
-import org.apache.isis.applib.annotation.InteractionScope;
-import org.apache.isis.applib.annotation.OrderPrecedence;
 import org.apache.isis.applib.events.lifecycle.AbstractLifecycleEvent;
 import org.apache.isis.applib.services.bookmark.Bookmark;
 import org.apache.isis.applib.services.eventbus.EventBusService;
@@ -48,9 +42,7 @@ import org.apache.isis.applib.services.publishing.spi.EntityChanges;
 import org.apache.isis.applib.services.publishing.spi.EntityPropertyChange;
 import org.apache.isis.applib.services.xactn.TransactionId;
 import org.apache.isis.commons.collections.Can;
-import org.apache.isis.commons.internal.base._Lazy;
-import org.apache.isis.commons.internal.collections._Maps;
-import org.apache.isis.commons.internal.collections._Sets;
+import org.apache.isis.commons.internal.debug._Probe;
 import org.apache.isis.commons.internal.exceptions._Exceptions;
 import org.apache.isis.commons.internal.factory._InstanceUtil;
 import org.apache.isis.core.metamodel.facets.object.callbacks.CallbackFacet;
@@ -75,8 +67,6 @@ import org.apache.isis.core.security.authentication.AuthenticationContext;
 import org.apache.isis.core.transaction.changetracking.events.IsisTransactionPlaceholder;
 import org.apache.isis.core.transaction.events.TransactionBeforeCompletionEvent;
 
-import lombok.AccessLevel;
-import lombok.Getter;
 import lombok.NonNull;
 import lombok.val;
 import lombok.extern.log4j.Log4j2;
@@ -86,10 +76,6 @@ import lombok.extern.log4j.Log4j2;
  */
 @Service
 @Named("isis.transaction.EntityChangeTrackerDefault")
-@Order(OrderPrecedence.EARLY)
-@Primary
-@Qualifier("Default")
-@InteractionScope
 @Log4j2
 public class EntityChangeTrackerDefault
 implements
@@ -104,75 +90,59 @@ implements
     @Inject private Provider<InteractionContext> interactionContextProvider;
     @Inject private Provider<AuthenticationContext> authenticationContextProvider;
     
-
-    /**
-     * Contains initial change records having set the pre-values of every property of every object that was enlisted.
-     */
-    private final Set<_PropertyChangeRecord> entityPropertyChangeRecords = _Sets.newLinkedHashSet();
-
-    /**
-     * Contains pre- and post- values of every property of every object that actually changed. A lazy snapshot,
-     * triggered by internal call to {@link #snapshotPropertyChangeRecords()}.
-     */
-    private final _Lazy<Set<_PropertyChangeRecord>> entityPropertyChangeRecordsForPublishing 
-        = _Lazy.threadSafe(this::capturePostValuesAndDrain);
-
-    @Getter(AccessLevel.PACKAGE)
-    private final Map<Bookmark, EntityChangeKind> changeKindByEnlistedAdapter = _Maps.newLinkedHashMap();
+    private ThreadLocal<_TransactionScopedContext> transactionScopedContext 
+        = ThreadLocal.withInitial(()->
+                new _TransactionScopedContext(interactionContextProvider, authenticationContextProvider));
 
     private boolean isEnlisted(final @NonNull ManagedObject adapter) {
         return ManagedObjects.bookmark(adapter)
-        .map(changeKindByEnlistedAdapter::containsKey)
+        .map(bookmark->transactionScopedContext.get()
+                .changeKindByEnlistedAdapter()
+                .containsKey(bookmark))
         .orElse(false);
     }
 
-    private void enlistCreatedInternal(final @NonNull ManagedObject adapter) {
-        if(!isEntityEnabledForChangePublishing(adapter)) {
-            return;
-        }
-        enlistForChangeKindPublishing(adapter, EntityChangeKind.CREATE);
-        enlistForPreAndPostValuePublishing(adapter, record->record.setPreValue(IsisTransactionPlaceholder.NEW));
-    }
-
-    private void enlistUpdatingInternal(final @NonNull ManagedObject adapter) {
-        if(!isEntityEnabledForChangePublishing(adapter)) {
-            return;
-        }
-        enlistForChangeKindPublishing(adapter, EntityChangeKind.UPDATE);
-        enlistForPreAndPostValuePublishing(adapter, _PropertyChangeRecord::updatePreValue);
-    }
-
-    private void enlistDeletingInternal(final @NonNull ManagedObject adapter) {
-        if(!isEntityEnabledForChangePublishing(adapter)) {
-            return;
-        }
-        final boolean enlisted = enlistForChangeKindPublishing(adapter, EntityChangeKind.DELETE);
-        if(enlisted) {
-            enlistForPreAndPostValuePublishing(adapter, _PropertyChangeRecord::updatePreValue);            
+    private void enlistCreatedInternal(final @NonNull ManagedObject entity) {
+        onEntityChangeRecognized();
+        if(isEntityEnabledForChangePublishing(entity)) {
+            transactionScopedContext.get()
+                .enlistForChangeKindPublishing(entity, EntityChangeKind.CREATE);
+            enlistForPreAndPostValuePublishing(entity, record->record.setPreValue(IsisTransactionPlaceholder.NEW));    
         }
     }
 
-    private Set<_PropertyChangeRecord> snapshotPropertyChangeRecords() {
-        // this code path has side-effects, it locks the result for this transaction,
-        // such that cannot enlist on top of it
-        return entityPropertyChangeRecordsForPublishing.get();
+    private void enlistUpdatingInternal(final @NonNull ManagedObject entity) {
+        onEntityChangeRecognized();
+        if(isEntityEnabledForChangePublishing(entity)) {
+            transactionScopedContext.get()
+                .enlistForChangeKindPublishing(entity, EntityChangeKind.UPDATE);
+            enlistForPreAndPostValuePublishing(entity, _PropertyChangeRecord::updatePreValue);    
+        }
     }
 
-    private boolean isEntityEnabledForChangePublishing(final @NonNull ManagedObject adapter) {
+    private void enlistDeletingInternal(final @NonNull ManagedObject entity) {
+        onEntityChangeRecognized();
+        if(isEntityEnabledForChangePublishing(entity)) {
+            val successfullyEnlisted = transactionScopedContext.get()
+                    .enlistForChangeKindPublishing(entity, EntityChangeKind.DELETE);
+            if(successfullyEnlisted) {
+                enlistForPreAndPostValuePublishing(entity, _PropertyChangeRecord::updatePreValue);            
+            }   
+        }
+    }
 
-        if(entityPropertyChangeRecordsForPublishing.isMemoized()) {
+    private void onEntityChangeRecognized() {
+        if(transactionScopedContext.get().isAlreadyPreparedForPublishing()) {
             throw _Exceptions.illegalState("Cannot enlist additional changes for auditing, "
                     + "since changedObjectPropertiesRef was already prepared (memoized) for auditing.");
         }
-
         entityChangeEventCount.increment();
         enableCommandPublishing();
-
-        if(!EntityChangePublishingFacet.isPublishingEnabled(adapter.getSpecification())) {
-            return false; // ignore entities that are not enabled for entity change publishing
-        }
-
-        return true;
+    }
+    
+    boolean isEntityEnabledForChangePublishing(final @NonNull ManagedObject entity) {
+        // ignore entities that are not enabled for entity change publishing
+        return EntityChangePublishingFacet.isPublishingEnabled(entity.getSpecification());
     }
 
     /**
@@ -197,12 +167,18 @@ implements
     }
 
     private void postPublishing() {
+        debug("PURGE");
         log.debug("purging entity change records");
-        entityPropertyChangeRecords.clear();
-        changeKindByEnlistedAdapter.clear();
-        entityPropertyChangeRecordsForPublishing.clear();
+        transactionScopedContext.remove();
         entityChangeEventCount.reset();
         numberEntitiesLoaded.reset();
+    }
+
+    private void debug(String label) {
+        _Probe.errOut("!!![%s] %s %d", 
+                Integer.toHexString(EntityChangeTrackerDefault.this.hashCode()),
+                label, 
+                transactionScopedContext.get().entityPropertyChangeRecords().size());
     }
 
     private void enableCommandPublishing() {
@@ -226,77 +202,24 @@ implements
 
     // -- HELPER
 
-    /**
-     * @return <code>true</code> if successfully enlisted, <code>false</code> if was already enlisted
-     */
-    private boolean enlistForChangeKindPublishing(
-            final @NonNull ManagedObject entity,
-            final @NonNull EntityChangeKind changeKind) {
-
-        val bookmark = ManagedObjects.bookmarkElseFail(entity);
-        
-        val previousChangeKind = changeKindByEnlistedAdapter.get(bookmark);
-        if(previousChangeKind == null) {
-            changeKindByEnlistedAdapter.put(bookmark, changeKind);
-            return true;
-        }
-        switch (previousChangeKind) {
-        case CREATE:
-            switch (changeKind) {
-            case DELETE:
-                changeKindByEnlistedAdapter.remove(bookmark);
-            case CREATE:
-            case UPDATE:
-                return false;
-            }
-            break;
-        case UPDATE:
-            switch (changeKind) {
-            case DELETE:
-                changeKindByEnlistedAdapter.put(bookmark, changeKind);
-                return true;
-            case CREATE:
-            case UPDATE:
-                return false;
-            }
-            break;
-        case DELETE:
-            return false;
-        }
-        return previousChangeKind == null;
-    }
-
     private void enlistForPreAndPostValuePublishing(
             final ManagedObject entity,
-            final Consumer<_PropertyChangeRecord> fun) {
+            final Consumer<_PropertyChangeRecord> onNewRecord) {
 
         log.debug("enlist entity's property changes for publishing {}", entity);
 
+        val entityPropertyChangeRecords = transactionScopedContext.get()
+                .entityPropertyChangeRecords();
         entity.getSpecification().streamProperties(MixedIn.EXCLUDED)
         .filter(property->!property.isNotPersisted())
         .map(property->_PropertyChangeRecord.of(entity, property))
         .filter(record->!entityPropertyChangeRecords.contains(record)) // already enlisted, so ignore
         .forEach(record->{
-            fun.accept(record);
+            onNewRecord.accept(record);
+            debug("ADD");
             entityPropertyChangeRecords.add(record);
+            debug("ADDED");
         });
-    }
-
-    /**
-     * For any enlisted Object Properties collects those, that are meant for publishing,
-     * then clears enlisted objects.
-     */
-    private Set<_PropertyChangeRecord> capturePostValuesAndDrain() {
-
-        val records = entityPropertyChangeRecords.stream()
-                .peek(managedProperty->managedProperty.updatePostValue()) // set post values, which have been left empty up to now
-                .filter(managedProperty->managedProperty.getPreAndPostValue().shouldPublish())
-                .collect(_Sets.toUnmodifiable());
-
-        entityPropertyChangeRecords.clear();
-
-        return records;
-
     }
 
     // -- METRICS SERVICE
@@ -308,11 +231,11 @@ implements
 
     @Override
     public int numberEntitiesDirtied() {
-        return changeKindByEnlistedAdapter.size();
+        return transactionScopedContext.get().numberEntitiesDirtied();
     }
-
+    
     int propertyChangeRecordCount() {
-        return snapshotPropertyChangeRecords().size();
+        return transactionScopedContext.get().propertyChangeRecordCount();
     }
 
     // -- ENTITY CHANGE TRACKING
@@ -339,6 +262,9 @@ implements
 
     @Override
     public void enlistUpdating(ManagedObject entity) {
+        
+        _Exceptions.dumpStackTrace();
+        
         _Xray.enlistUpdating(entity, interactionContextProvider, authenticationContextProvider);
         val hasAlreadyBeenEnlisted = isEnlisted(entity);
         // we call this come what may;
@@ -409,10 +335,16 @@ implements
             final String userName,
             final TransactionId txId) {
 
-        return snapshotPropertyChangeRecords().stream()
+        return transactionScopedContext.get()
+                .snapshotPropertyChangeRecords()
+                .stream()
                 .map(propertyChangeRecord->_EntityPropertyChangeFactory
                         .createEntityPropertyChange(timestamp, userName, txId, propertyChangeRecord))
                 .collect(Can.toCan());
+    }
+
+    Map<Bookmark, EntityChangeKind> changeKindByEnlistedAdapter() {
+        return transactionScopedContext.get().changeKindByEnlistedAdapter();
     }
 
 }

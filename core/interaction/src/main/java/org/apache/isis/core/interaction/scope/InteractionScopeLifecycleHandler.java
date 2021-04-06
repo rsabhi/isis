@@ -23,7 +23,7 @@ package org.apache.isis.core.interaction.scope;
  */
 public interface InteractionScopeLifecycleHandler {
 
-    void onTopLevelInteractionOpened();
-    void onTopLevelInteractionClosing();
+    void onInteractionOpened();
+    void onInteractionClosing();
     
 }

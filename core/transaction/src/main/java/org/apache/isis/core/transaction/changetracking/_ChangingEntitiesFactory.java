@@ -42,7 +42,7 @@ final class _ChangingEntitiesFactory {
             final String userName,
             final EntityChangeTrackerDefault entityChangeTracker) {
 
-        if(entityChangeTracker.getChangeKindByEnlistedAdapter().isEmpty()) {
+        if(entityChangeTracker.changeKindByEnlistedAdapter().isEmpty()) {
             return Optional.empty();
         }
         
@@ -50,7 +50,7 @@ final class _ChangingEntitiesFactory {
         // creates further entities which would be enlisted;
         // taking copy of the map avoids ConcurrentModificationException
         val changeKindByEnlistedAdapter = new HashMap<>(
-                entityChangeTracker.getChangeKindByEnlistedAdapter());
+                entityChangeTracker.changeKindByEnlistedAdapter());
 
         val changingEntities = newChangingEntities(
                 completedAt,

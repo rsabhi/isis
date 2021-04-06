@@ -39,7 +39,10 @@ import lombok.extern.log4j.Log4j2;
  * @since 2.0
  */
 @Log4j2
-class InteractionScope implements Scope, InteractionScopeLifecycleHandler {
+class InteractionScope 
+implements 
+    Scope, 
+    InteractionScopeLifecycleHandler {
     
     @Inject private InteractionTracker isisInteractionTracker;
 
@@ -49,7 +52,7 @@ class InteractionScope implements Scope, InteractionScopeLifecycleHandler {
         Object instance;
         Runnable destructionCallback;
         void preDestroy() {
-            log.debug("destroy isis-session scoped {}", name);
+            log.debug("destroy isis-interaction scoped {}", name);
             if(destructionCallback!=null) {
                 destructionCallback.run();
             }
@@ -75,14 +78,25 @@ class InteractionScope implements Scope, InteractionScopeLifecycleHandler {
         
         val existingScopedObject = scopedObjects.get().get(name);
         if(existingScopedObject!=null) {
+            
+            _Probe.errOut("INTERACTION_SCOPE [%s:%s] reuse existing %s", 
+                    _Probe.currentThreadId(),
+                    getConversationId(),
+                    Integer.toHexString(existingScopedObject.hashCode()));
+            
             return existingScopedObject.getInstance();
         }
         
         val newScopedObject = ScopedObject.of(name); 
         scopedObjects.get().put(name, newScopedObject); // just set a stub with a name only
         
-        log.debug("create new isis-session scoped {}", name);
+        log.debug("create new isis-interaction scoped {}", name);
         newScopedObject.setInstance(objectFactory.getObject()); // triggers call to registerDestructionCallback
+        
+        _Probe.errOut("INTERACTION_SCOPE [%s:%s] create new %s",
+                _Probe.currentThreadId(),
+                getConversationId(),
+                Integer.toHexString(newScopedObject.hashCode()));
         
         return newScopedObject.getInstance();
     }
@@ -116,12 +130,16 @@ class InteractionScope implements Scope, InteractionScopeLifecycleHandler {
     }
     
     @Override
-    public void onTopLevelInteractionOpened() {
+    public void onInteractionOpened() {
         // nothing to do
+        _Probe.errOut("INTERACTION_SCOPE opening");
     }
 
     @Override
-    public void onTopLevelInteractionClosing() {
+    public void onInteractionClosing() {
+        
+        _Probe.errOut("INTERACTION_SCOPE closing");
+        
         try {
             scopedObjects.get().values().forEach(ScopedObject::preDestroy);
         } finally {

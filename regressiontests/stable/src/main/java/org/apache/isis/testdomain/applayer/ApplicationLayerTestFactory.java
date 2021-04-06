@@ -27,7 +27,6 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -46,7 +45,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 
 import org.apache.isis.applib.annotation.Where;
-import org.apache.isis.applib.services.iactn.Interaction;
 import org.apache.isis.applib.services.repository.RepositoryService;
 import org.apache.isis.applib.services.wrapper.DisabledException;
 import org.apache.isis.applib.services.wrapper.WrapperFactory;
@@ -59,7 +57,6 @@ import org.apache.isis.commons.internal.debug.xray.XrayUi;
 import org.apache.isis.commons.internal.exceptions._Exceptions;
 import org.apache.isis.commons.internal.functions._Functions.CheckedConsumer;
 import org.apache.isis.core.interaction.session.InteractionFactory;
-import org.apache.isis.core.interaction.session.InteractionTracker;
 import org.apache.isis.core.metamodel.interactions.managed.PropertyInteraction;
 import org.apache.isis.core.metamodel.objectmanager.ObjectManager;
 import org.apache.isis.core.metamodel.spec.ManagedObject;
@@ -89,7 +86,6 @@ public class ApplicationLayerTestFactory {
     private final FixtureScripts fixtureScripts;
     private final PreCommitListener preCommitListener;
     private final InteractionFactory interactionFactory;
-    private final InteractionTracker interactionTracker;
     
     @Named("transaction-aware-pmf-proxy")
     private final PersistenceManagerFactory pmf;
@@ -123,30 +119,30 @@ public class ApplicationLayerTestFactory {
 
         val dynamicTests = Can.<DynamicTest>of(
                 
-                interactionTest("Programmatic Execution", 
-                        given, verifier, 
-                        VerificationStage.POST_INTERACTION_WHEN_PROGRAMMATIC, 
-                        this::programmaticExecution),
+//                interactionTest("Programmatic Execution", 
+//                        given, verifier, 
+//                        VerificationStage.POST_INTERACTION_WHEN_PROGRAMMATIC, 
+//                        this::programmaticExecution),
                 interactionTest("Interaction Api Execution", 
                         given, verifier, 
                         VerificationStage.POST_INTERACTION, 
-                        this::interactionApiExecution),
-                interactionTest("Wrapper Sync Execution w/o Rules", 
-                        given, verifier, 
-                        VerificationStage.POST_INTERACTION, 
-                        this::wrapperSyncExecutionNoRules),
-                interactionTest("Wrapper Sync Execution w/ Rules (expected to fail w/ DisabledException)", 
-                        given, verifier, 
-                        VerificationStage.POST_INTERACTION, 
-                        this::wrapperSyncExecutionWithFailure),
-                interactionTest("Wrapper Async Execution w/o Rules", 
-                        given, verifier, 
-                        VerificationStage.POST_INTERACTION, 
-                        this::wrapperAsyncExecutionNoRules),
-                interactionTest("Wrapper Async Execution w/ Rules (expected to fail w/ DisabledException)", 
-                        given, verifier, 
-                        VerificationStage.POST_INTERACTION, 
-                        this::wrapperAsyncExecutionWithFailure)
+                        this::interactionApiExecution)
+//                interactionTest("Wrapper Sync Execution w/o Rules", 
+//                        given, verifier, 
+//                        VerificationStage.POST_INTERACTION, 
+//                        this::wrapperSyncExecutionNoRules),
+//                interactionTest("Wrapper Sync Execution w/ Rules (expected to fail w/ DisabledException)", 
+//                        given, verifier, 
+//                        VerificationStage.POST_INTERACTION, 
+//                        this::wrapperSyncExecutionWithFailure),
+//                interactionTest("Wrapper Async Execution w/o Rules", 
+//                        given, verifier, 
+//                        VerificationStage.POST_INTERACTION, 
+//                        this::wrapperAsyncExecutionNoRules),
+//                interactionTest("Wrapper Async Execution w/ Rules (expected to fail w/ DisabledException)", 
+//                        given, verifier, 
+//                        VerificationStage.POST_INTERACTION, 
+//                        this::wrapperAsyncExecutionWithFailure)
                 );
 
         return XrayUi.isXrayEnabled()
@@ -180,10 +176,7 @@ public class ApplicationLayerTestFactory {
             assert_no_initial_tx_context();
             
             final boolean isSuccesfulRun = interactionFactory.callAnonymous(()->{
-                val currentInteraction = interactionTracker.currentInteraction();
-                xrayEnterInteraction(currentInteraction);
                 val result = interactionTestRunner.run(given, verifier);
-                xrayExitInteraction();
                 return result;
             });
             
@@ -438,21 +431,19 @@ public class ApplicationLayerTestFactory {
     
     private void withBookDoTransactional(CheckedConsumer<JdoBook> transactionalBookConsumer) {
         
-        xrayEnterTansaction(Propagation.REQUIRES_NEW);
-        
         transactionService.runTransactional(Propagation.REQUIRES_NEW, ()->{
             val book = repository.allInstances(JdoBook.class).listIterator().next();
             transactionalBookConsumer.accept(book);
 
         })
         .optionalElseFail();
-        
-        xrayExitTansaction();
     }
     
     // -- XRAY
     
     private void xrayAddTest(String name) {
+        
+        _Probe.errOut("TESTING %s", name);
         
         val threadId = XrayUtil.currentThreadAsMemento();
         
@@ -465,16 +456,5 @@ public class ApplicationLayerTestFactory {
         
     }
     
-    private void xrayEnterTansaction(Propagation propagation) {
-    }
-    
-    private void xrayExitTansaction() {
-    }
-    
-    private void xrayEnterInteraction(Optional<Interaction> currentInteraction) {
-    }
-    
-    private void xrayExitInteraction() {
-    }
 
 }
